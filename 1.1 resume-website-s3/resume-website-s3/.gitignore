@@ -1,0 +1,41 @@
+# Byte-compiled / cache / logs
+__pycache__/
+*.py[cod]
+*.log
+
+# Ansible
+*.retry
+*.vault
+*.orig
+
+# AWS credentials (never commit real credentials!)
+.aws/
+*.pem
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+crash.log
+*.tfvars
+terraform.tfvars.json
+*.terraform*
+
+# Lambda deployment packages
+lambda/*.zip
+
+# Node modules (if any JS code is added)
+node_modules/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+
+# Misc
+*.bak
