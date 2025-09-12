@@ -3,22 +3,22 @@ variable "contact_email" {
   type        = string
 }
 
-variable "domain_name" {
-  description = "Website domain name"
-  type        = string
-}
+# variable "domain_name" {
+#   description = "Website domain name"
+#   type        = string
+# }
 
 variable "github_repo" {
   description = "GitHub repository for CI/CD"
   type        = string
 }
 
-variable "owner" {
+variable "github_owner" {
   description = "GitHub repository owner for CI/CD"
   type        = string
 }
 
-variable "branch" {
+variable "github_branch" {
   description = "GitHub repository branch for CI/CD"
   type        = string
 }

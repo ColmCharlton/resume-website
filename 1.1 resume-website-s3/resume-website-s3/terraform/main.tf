@@ -17,7 +17,7 @@ resource "random_id" "bucket_suffix" {
 
 resource "aws_s3_bucket" "resume_website" {
   bucket = "resume-website-${random_id.bucket_suffix.hex}"
-  acl    = "public-read"
+  acl    = "public-read" # Change to a fine grained policy
   policy = data.aws_iam_policy_document.s3_public_read.json
 
   website {
@@ -27,6 +27,11 @@ resource "aws_s3_bucket" "resume_website" {
 
   versioning {
     enabled = true
+  }
+
+  tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
   }
 }
 
@@ -52,6 +57,11 @@ resource "aws_cloudfront_distribution" "resume_distribution" {
       origin_protocol_policy = "http-only"
       origin_ssl_protocols   = ["TLSv1.2"]
     }
+   
+    tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
+  }
   }
 
   enabled             = true
@@ -83,7 +93,7 @@ resource "aws_cloudfront_distribution" "resume_distribution" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    cloudfront_default_certificate = true # Use ACM for custom domain 
   }
 }
 
@@ -96,6 +106,11 @@ resource "aws_dynamodb_table" "visitor_count" {
     name = "id"
     type = "S"
   }
+  
+  tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
+  }
 }
 
 resource "aws_lambda_function" "visitor_counter" {
@@ -103,13 +118,19 @@ resource "aws_lambda_function" "visitor_counter" {
   function_name = "resume_visitor_counter"
   role          = aws_iam_role.lambda_role.arn
   handler       = "index.handler"
-  runtime       = "nodejs14.x"
+  runtime       = "nodejs18.x"
 
   environment {
     variables = {
       TABLE_NAME = aws_dynamodb_table.visitor_count.name
     }
   }
+
+  tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
+  }
+
 }
 
 resource "aws_iam_role" "lambda_role" {
@@ -127,11 +148,40 @@ resource "aws_iam_role" "lambda_role" {
       }
     ]
   })
+  
+  tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "lambda_dynamo" {
   role       = aws_iam_role.lambda_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"
+}
+
+resource "aws_iam_policy" "lambda_dynamodb_least_privilege" {
+  name        = "lambda-dynamodb-least-privilege"
+  description = "Least privilege policy for Lambda to access DynamoDB table"
+  policy      = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem"
+        ]
+        Resource = aws_dynamodb_table.visitor_count.arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_dynamo" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.lambda_dynamodb_least_privilege.arn
 }
 
 resource "aws_iam_role_policy_attachment" "lambda_logs" {
@@ -142,6 +192,11 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
 resource "aws_api_gateway_rest_api" "resume_api" {
   name        = "ResumeWebsiteAPI"
   description = "API for resume website backend services"
+
+  tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
+  }
 }
 
 resource "aws_api_gateway_resource" "visitor" {
@@ -182,7 +237,12 @@ resource "aws_api_gateway_deployment" "resume_api_deployment" {
 }
 
 resource "aws_ses_domain_identity" "resume_domain" {
-  domain = var.contact_email
+  domain = var.domain_name
+
+  tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
+  }
 }
 
 resource "aws_lambda_function" "contact_form" {
@@ -194,8 +254,13 @@ resource "aws_lambda_function" "contact_form" {
 
   environment {
     variables = {
-      EMAIL_RECIPIENT = "your@email.com"
+      EMAIL_RECIPIENT = var.contact_email
     }
+  }
+
+  tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
   }
 }
 
@@ -223,6 +288,16 @@ resource "aws_cloudwatch_dashboard" "resume_dashboard" {
       }
     ]
   })
+
+  tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
+  }
+}
+
+data "aws_ssm_parameter" "github_token" {
+  name            = "/resume/github_token"
+  with_decryption = true
 }
 
 resource "aws_codepipeline" "resume_pipeline" {
@@ -245,10 +320,13 @@ resource "aws_codepipeline" "resume_pipeline" {
       output_artifacts = ["source_output"]
 
       configuration = {
-        Owner      = "your-github-username"
-        Repo       = "resume-website"
-        Branch     = "main"
-        OAuthToken = var.github_token
+        Owner      = var.github_owner
+        Repo       = var.github_repo
+        Branch     = var.branch
+        # OAuthToken = var.github_token
+        OAuthToken = data.aws_ssm_parameter.github_token.value
+
+        # aws ssm put-parameter --name "/resume/github_token" --value "ghp_YourGitHubTokenHere" --type "SecureString"
       }
     }
   }
@@ -269,12 +347,9 @@ resource "aws_codepipeline" "resume_pipeline" {
       }
     }
   }
-}
 
-output "website_url" {
-  value = aws_cloudfront_distribution.resume_distribution.domain_name
-}
-
-output "api_endpoint" {
-  value = "${aws_api_gateway_deployment.resume_api_deployment.invoke_url}/visitor"
+  tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
+  }
 }
