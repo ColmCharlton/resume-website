@@ -15,19 +15,12 @@ resource "random_id" "bucket_suffix" {
   byte_length = 4
 }
 
-# 1. Remove the public read policy data source and IAM policy resources for putting bucket policy,
+# Remove the public read policy data source and IAM policy resources for putting bucket policy,
 # as the bucket should be private and accessed only via CloudFront with OAC.
-# Removed: data "aws_iam_policy_document" "s3_public_read"
-# Removed: aws_iam_policy.put_bucket_policy
-# Removed: aws_iam_user_policy_attachment.user_put_bucket_policy
-
 resource "aws_s3_bucket" "resume_website" {
   bucket = "resume-website-${random_id.bucket_suffix.hex}"
 
-  # 2. Remove the website block and disable static website hosting
-  # Removed: website { ... }
-
-  # 3. Enable versioning for safety
+  #Enable versioning for safety
   versioning {
     enabled = true
   }
@@ -80,30 +73,53 @@ resource "aws_s3_bucket_public_access_block" "resume_website" {
   restrict_public_buckets = true
 }
 
-# 7. Update the CloudFront distribution to use the S3 bucket's regional endpoint and OAC
-resource "aws_s3_object" "index_file" {
-  bucket = aws_s3_bucket.resume_website.id
-  key    = "index.html"
-  content = templatefile("${path.module}/../frontend/index.html.tpl", {
-    backend_api_url = aws_api_gateway_deployment.resume_api_deployment.invoke_url
-    # backend_api_url = module.resume_api.api_base_url
-  })
-  content_type = "text/html"
+resource "random_id" "index_version" {
+  byte_length = 4
 }
 
-# 8. Update the CloudFront distribution to use the S3 bucket's regional endpoint and OAC
+# #Update the CloudFront distribution to use the S3 bucket's regional endpoint and OAC
+# resource "aws_s3_object" "index_file" {
+#   bucket = aws_s3_bucket.resume_website.id
+#   key    = "index-${random_id.index_version.hex}.html"
+#   content = templatefile("${path.module}/../frontend/index.html.tpl", {
+#     backend_api_url = aws_api_gateway_deployment.resume_api_deployment.invoke_url
+#     index_version   = random_id.index_version.hex
+
+#     # backend_api_url = module.resume_api.api_base_url
+#   })
+#   content_type = "text/html"
+# }
+
+# resource "aws_s3_object" "styles_css" {
+#   bucket       = aws_s3_bucket.resume_website.id
+#   key          = "styles-${random_id.index_version.hex}.css"
+#   content      = file("${path.module}/../frontend/styles.css")
+#   content_type = "text/css"
+# }
+
+# resource "aws_s3_object" "scripts_js" {
+#   bucket       = aws_s3_bucket.resume_website.id
+#   key          = "scripts-${random_id.index_version.hex}.js"
+#   content      = templatefile("${path.module}/../frontend/scripts.js", {
+#     backend_api_url = aws_api_gateway_deployment.resume_api_deployment.invoke_url
+#   })
+#   content_type = "application/javascript"
+# }
+
+#Update the CloudFront distribution to use the S3 bucket's regional endpoint and OAC
 resource "aws_cloudfront_distribution" "resume_distribution" {
   enabled             = true
   is_ipv6_enabled     = true
   default_root_object = "index.html"
 
   origin {
-    domain_name              = aws_s3_bucket.resume_website.bucket_regional_domain_name # Use regional domain name
+    domain_name              = aws_s3_bucket.resume_website.bucket_regional_domain_name
     origin_id                = "S3-resume-website"
-    origin_access_control_id = aws_cloudfront_origin_access_control.resume_oac.id # Reference the OAC
+    origin_access_control_id = aws_cloudfront_origin_access_control.resume_oac.id
 
-    # Remove custom_origin_config as we are now using the S3 REST endpoint
-    # Removed: custom_origin_config { ... }
+    s3_origin_config {
+      origin_access_identity = ""
+    }
   }
 
   default_cache_behavior {
@@ -222,6 +238,10 @@ resource "aws_iam_policy" "lambda_dynamodb_least_privilege" {
   })
 }
 
+resource "aws_ses_email_identity" "contact" {
+  email = "columcharlton@gmail.com"
+}
+
 # SES SendEmail policy for Lambda contact form
 resource "aws_iam_policy" "lambda_ses_send_email" {
   name        = "lambda-ses-send-email"
@@ -314,6 +334,81 @@ resource "aws_api_gateway_integration" "contact_integration" {
   uri                     = aws_lambda_function.contact_form.invoke_arn
 }
 
+
+# Visitor GET method response for CORS
+resource "aws_api_gateway_method_response" "visitor_get_cors" {
+  rest_api_id = aws_api_gateway_rest_api.resume_api.id
+  resource_id = aws_api_gateway_resource.visitor.id
+  http_method = "GET"
+  status_code = "200"
+
+  response_models = {
+    "application/json" = "Empty"
+  }
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = true
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "visitor_get_cors" {
+  rest_api_id = aws_api_gateway_rest_api.resume_api.id
+  resource_id = aws_api_gateway_resource.visitor.id
+  http_method = aws_api_gateway_method.visitor_get.http_method
+  status_code = "200"
+
+  depends_on = [aws_api_gateway_method_response.visitor_get_cors]
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = "'*'"
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+    "method.response.header.Access-Control-Allow-Methods" = "'GET,OPTIONS'"
+  }
+
+  response_templates = {
+    "application/json" = ""
+  }
+}
+
+# Contact POST method response for CORS
+resource "aws_api_gateway_method_response" "contact_post_cors" {
+  rest_api_id = aws_api_gateway_rest_api.resume_api.id
+  resource_id = aws_api_gateway_resource.contact.id
+  http_method = "POST"
+  status_code = "200"
+
+  depends_on = [aws_api_gateway_method_response.contact_post_cors]
+
+  response_models = {
+    "application/json" = "Empty"
+  }
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = true
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "contact_post_cors" {
+  rest_api_id = aws_api_gateway_rest_api.resume_api.id
+  resource_id = aws_api_gateway_resource.contact.id
+  http_method = aws_api_gateway_method.contact_post.http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = "'*'"
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+    "method.response.header.Access-Control-Allow-Methods" = "'POST,OPTIONS'"
+  }
+
+  response_templates = {
+    "application/json" = ""
+  }
+}
+
 resource "aws_lambda_permission" "apigw_lambda" {
   statement_id  = "AllowExecutionFromAPIGateway"
   action        = "lambda:InvokeFunction"
@@ -336,6 +431,18 @@ resource "aws_api_gateway_deployment" "resume_api_deployment" {
 
   rest_api_id = aws_api_gateway_rest_api.resume_api.id
   stage_name  = "prod"
+}
+
+# Store the API base URL in SSM Parameter Store for CI/CD consumption
+resource "aws_ssm_parameter" "api_base_url" {
+  name  = "/resume/api_base_url"
+  type  = "String"
+  value = aws_api_gateway_deployment.resume_api_deployment.invoke_url
+
+  tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
+  }
 }
 
 resource "aws_ses_domain_identity" "resume_domain" {
@@ -449,6 +556,206 @@ resource "aws_iam_role_policy_attachment" "codepipeline_s3_attachment" {
   policy_arn = aws_iam_policy.codepipeline_s3_access.arn
 }
 
+# CodeBuild service role for build stage
+resource "aws_iam_role" "codebuild_role" {
+  name = "codebuild_service_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = {
+          Service = "codebuild.amazonaws.com"
+        },
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+# Minimal permissions for CodeBuild: logs, SSM parameter read, S3 access to artifact bucket
+resource "aws_iam_role_policy" "codebuild_policy" {
+  name = "codebuild-inline-policy"
+  role = aws_iam_role.codebuild_role.id
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        Resource = "arn:aws:logs:*:*:*"
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "ssm:GetParameter"
+        ],
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow",
+        Action   = ["s3:ListBucket"],
+        Resource = "${aws_s3_bucket.resume_website.arn}"
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:GetObjectVersion",
+          "s3:AbortMultipartUpload"
+        ],
+        Resource = "${aws_s3_bucket.resume_website.arn}/*"
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "cloudfront:CreateInvalidation"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_codebuild_project" "resume_build" {
+  name         = "resume-website-build"
+  description  = "Builds the static site and injects API base URL from SSM"
+  service_role = aws_iam_role.codebuild_role.arn
+
+  artifacts {
+    type = "CODEPIPELINE"
+  }
+
+  environment {
+    compute_type                = "BUILD_GENERAL1_SMALL"
+    image                       = "aws/codebuild/standard:6.0"
+    type                        = "LINUX_CONTAINER"
+    privileged_mode             = false
+    image_pull_credentials_type = "CODEBUILD"
+  }
+
+  source {
+    type      = "CODEPIPELINE"
+    buildspec = <<-EOT
+version: 0.2
+phases:
+  install:
+    commands:
+      - echo Using AWS CLI to fetch API base URL from SSM
+  build:
+    commands:
+      - set -e
+      - REGION=eu-west-1
+      - API_BASE_URL=$(aws ssm get-parameter --name "/resume/api_base_url" --with-decryption --query Parameter.Value --output text --region "$REGION")
+      - echo "API_BASE_URL=$API_BASE_URL"
+      - INDEX_VERSION=$(date +%s)
+      - export INDEX_VERSION
+      - mkdir -p dist
+      - SRC=1.1-resume-website-s3/resume-website-s3/frontend
+      - cp "$SRC/styles.css" "dist/styles-$INDEX_VERSION.css"
+      - sed "s|$${backend_api_url}|$API_BASE_URL|g" "$SRC/scripts.js" > "dist/scripts-$INDEX_VERSION.js"
+      - sed "s|$${backend_api_url}|$API_BASE_URL|g; s|$${index_version}|$INDEX_VERSION|g" "$SRC/index.html.tpl" > "dist/index.html"
+artifacts:
+  files:
+    - '**/*'
+  base-directory: dist
+EOT
+  }
+
+  tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
+  }
+}
+
+resource "aws_codebuild_project" "resume_invalidate" {
+  name         = "resume-website-invalidate"
+  description  = "Invalidates CloudFront index.html after deploy"
+  service_role = aws_iam_role.codebuild_role.arn
+
+  artifacts {
+    type = "CODEPIPELINE"
+  }
+
+  environment {
+    compute_type                = "BUILD_GENERAL1_SMALL"
+    image                       = "aws/codebuild/standard:6.0"
+    type                        = "LINUX_CONTAINER"
+    privileged_mode             = false
+    image_pull_credentials_type = "CODEBUILD"
+  }
+
+  source {
+    type      = "CODEPIPELINE"
+    buildspec = <<-EOT
+version: 0.2
+phases:
+  build:
+    commands:
+      - set -e
+      - echo "Invalidating CloudFront /index.html on $DISTRIBUTION_ID"
+      - aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/index.html"
+artifacts:
+  files:
+    - '**/*'
+EOT
+  }
+
+  tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
+  }
+}
+
+resource "aws_codebuild_project" "resume_deploy" {
+  name         = "resume-website-deploy"
+  description  = "Uploads built files to S3 with proper Cache-Control headers"
+  service_role = aws_iam_role.codebuild_role.arn
+
+  artifacts {
+    type = "CODEPIPELINE"
+  }
+
+  environment {
+    compute_type                = "BUILD_GENERAL1_SMALL"
+    image                       = "aws/codebuild/standard:6.0"
+    type                        = "LINUX_CONTAINER"
+    privileged_mode             = false
+    image_pull_credentials_type = "CODEBUILD"
+  }
+
+  source {
+    type      = "CODEPIPELINE"
+    buildspec = <<-EOT
+version: 0.2
+phases:
+  build:
+    commands:
+      - set -e
+      - echo "Uploading index.html with no-cache headers to s3://$BUCKET"
+      - aws s3 cp index.html s3://$BUCKET/index.html --cache-control "no-cache, no-store, must-revalidate" --content-type "text/html"
+      - echo "Uploading versioned CSS with long cache headers"
+      - aws s3 cp . s3://$BUCKET/ --recursive --exclude "*" --include "styles-*.css" --cache-control "public, max-age=31536000, immutable" --content-type "text/css"
+      - echo "Uploading versioned JS with long cache headers"
+      - aws s3 cp . s3://$BUCKET/ --recursive --exclude "*" --include "scripts-*.js" --cache-control "public, max-age=31536000, immutable" --content-type "application/javascript"
+artifacts:
+  files:
+    - '**/*'
+EOT
+  }
+
+  tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
+  }
+}
+
 resource "aws_codepipeline" "resume_pipeline" {
   name     = "resume-website-pipeline"
   role_arn = aws_iam_role.codepipeline_role.arn
@@ -481,18 +788,56 @@ resource "aws_codepipeline" "resume_pipeline" {
   }
 
   stage {
+    name = "Build"
+    action {
+      name             = "Build"
+      category         = "Build"
+      owner            = "AWS"
+      provider         = "CodeBuild"
+      version          = "1"
+      input_artifacts  = ["source_output"]
+      output_artifacts = ["build_output"]
+
+      configuration = {
+        ProjectName = aws_codebuild_project.resume_build.name
+      }
+    }
+  }
+
+  stage {
     name = "Deploy"
     action {
       name            = "Deploy"
-      category        = "Deploy"
+      category        = "Build"
       owner           = "AWS"
-      provider        = "S3"
-      input_artifacts = ["source_output"]
+      provider        = "CodeBuild"
+      input_artifacts = ["build_output"]
       version         = "1"
 
       configuration = {
-        BucketName = aws_s3_bucket.resume_website.bucket
-        Extract    = "true"
+        ProjectName = aws_codebuild_project.resume_deploy.name
+        EnvironmentVariables = jsonencode([
+          { name = "BUCKET", value = aws_s3_bucket.resume_website.bucket, type = "PLAINTEXT" }
+        ])
+      }
+    }
+  }
+
+  stage {
+    name = "Invalidate"
+    action {
+      name            = "InvalidateIndex"
+      category        = "Build"
+      owner           = "AWS"
+      provider        = "CodeBuild"
+      input_artifacts = ["build_output"]
+      version         = "1"
+
+      configuration = {
+        ProjectName = aws_codebuild_project.resume_invalidate.name
+        EnvironmentVariables = jsonencode([
+          { name = "DISTRIBUTION_ID", value = aws_cloudfront_distribution.resume_distribution.id, type = "PLAINTEXT" }
+        ])
       }
     }
   }
