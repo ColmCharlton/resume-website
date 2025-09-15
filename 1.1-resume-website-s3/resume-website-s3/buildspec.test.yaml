@@ -1,0 +1,19 @@
+version: 0.2
+env:
+  variables:
+    NODE_ENV: test
+phases:
+  install:
+    runtime-versions:
+      nodejs: 18
+    commands:
+      - echo "Installing Lambda test dependencies"
+      - cd 1.1-resume-website-s3/resume-website-s3/lambda
+      - npm ci
+      - cd -
+  build:
+    commands:
+      - echo "Running Jest unit tests for Lambdas"
+      - cd 1.1-resume-website-s3/resume-website-s3/lambda
+      - npx --yes jest --ci --colors lambda/__tests__/lambda.test.js
+      - cd -

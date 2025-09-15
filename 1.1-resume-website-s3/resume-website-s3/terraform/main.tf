@@ -572,7 +572,8 @@ resource "aws_iam_role_policy" "codepipeline_codebuild_access" {
         Resource = [
           aws_codebuild_project.resume_build.arn,
           aws_codebuild_project.resume_deploy.arn,
-          aws_codebuild_project.resume_invalidate.arn
+          aws_codebuild_project.resume_invalidate.arn, 
+          aws_codebuild_project.resume_tests.arn
         ]
       },
       {
@@ -585,6 +586,24 @@ resource "aws_iam_role_policy" "codepipeline_codebuild_access" {
     ]
   })
 }
+
+  # Allow CodePipeline to use CodeStar Connection
+  resource "aws_iam_role_policy" "codepipeline_codestar_connection_access" {
+    name = "codepipeline-codestar-connection-access"
+    role = aws_iam_role.codepipeline_role.id
+    policy = jsonencode({
+      Version = "2012-10-17"
+      Statement = [
+        {
+          Effect = "Allow"
+          Action = [
+            "codestar-connections:UseConnection"
+          ]
+          Resource = "arn:aws:codestar-connections:eu-west-1:458879677191:connection/28ea39b0-67ac-4d0c-bf31-36abdab9d4c1"
+        }
+      ]
+    })
+  }
 
 # CodeBuild service role for build stage
 resource "aws_iam_role" "codebuild_role" {
@@ -672,29 +691,9 @@ resource "aws_codebuild_project" "resume_build" {
 
   source {
     type      = "CODEPIPELINE"
-    buildspec = <<-EOT
-version: 0.2
-phases:
-  install:
-    commands:
-      - echo Using AWS CLI to fetch API base URL from SSM
-  build:
-    commands:
-      - set -e
-      - REGION=eu-west-1
-      - API_BASE_URL=$(aws ssm get-parameter --name "/resume/api_base_url" --with-decryption --query Parameter.Value --output text --region "$REGION")
-      - echo "API_BASE_URL=$API_BASE_URL"
-      - mkdir -p dist
-      - SRC=1.1-resume-website-s3/resume-website-s3/frontend
-      - cp "$SRC/styles.css" "dist/styles.css"
-      - sed 's|$${backend_api_url}|""$API_BASE_URL""|g' "$SRC/scripts.js" > "dist/scripts.js"
-      - sed 's|$${backend_api_url}|""$API_BASE_URL""|g' "$SRC/index.html.tpl" > "dist/index.html"
-artifacts:
-  files:
-    - '**/*'
-  base-directory: dist
-EOT
-  }
+    buildspec = file("${path.module}/../buildspec.build.yml")
+
+    }
 
   tags = {
     Project     = "ResumeWebsite"
@@ -721,18 +720,7 @@ resource "aws_codebuild_project" "resume_invalidate" {
 
   source {
     type      = "CODEPIPELINE"
-    buildspec = <<-EOT
-version: 0.2
-phases:
-  build:
-    commands:
-      - set -e
-      - echo "Invalidating CloudFront /index.html on $DISTRIBUTION_ID"
-      - aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/index.html"
-artifacts:
-  files:
-    - '**/*'
-EOT
+    buildspec = file("${path.module}/../buildspec.invalidate.yml")
   }
 
   tags = {
@@ -760,22 +748,35 @@ resource "aws_codebuild_project" "resume_deploy" {
 
   source {
     type      = "CODEPIPELINE"
-    buildspec = <<-EOT
-version: 0.2
-phases:
-  build:
-    commands:
-      - set -e
-      - echo "Uploading index.html with no-cache headers to s3://$BUCKET"
-      - aws s3 cp index.html s3://$BUCKET/index.html --cache-control "no-cache, no-store, must-revalidate" --content-type "text/html"
-      - echo "Uploading versioned CSS with long cache headers"
-      - aws s3 cp . s3://$BUCKET/ --recursive --exclude "*" --include "styles-*.css" --cache-control "public, max-age=31536000, immutable" --content-type "text/css"
-      - echo "Uploading versioned JS with long cache headers"
-      - aws s3 cp . s3://$BUCKET/ --recursive --exclude "*" --include "scripts-*.js" --cache-control "public, max-age=31536000, immutable" --content-type "application/javascript"
-artifacts:
-  files:
-    - '**/*'
-EOT
+    buildspec = file("${path.module}/../buildspec.deploy.yml")
+  }
+
+  tags = {
+    Project     = "ResumeWebsite"
+    Environment = "Production"
+  }
+}
+
+resource "aws_codebuild_project" "resume_tests" {
+  name         = "resume-website-tests"
+  description  = "Runs Lambda unit tests with Jest"
+  service_role = aws_iam_role.codebuild_role.arn
+
+  artifacts {
+    type = "CODEPIPELINE"
+  }
+
+  environment {
+    compute_type                = "BUILD_GENERAL1_SMALL"
+    image                       = "aws/codebuild/standard:6.0"
+    type                        = "LINUX_CONTAINER"
+    privileged_mode             = false
+    image_pull_credentials_type = "CODEBUILD"
+  }
+
+  source {
+    type      = "CODEPIPELINE"
+    buildspec = file("${path.module}/../buildspec.test.yaml")
   }
 
   tags = {
@@ -798,22 +799,20 @@ resource "aws_codepipeline" "resume_pipeline" {
     action {
       name             = "Source"
       category         = "Source"
-      owner            = "ThirdParty"
-      provider         = "GitHub"
-      version         = "1"
+      owner            = "AWS"
+      provider         = "CodeStarSourceConnection"
+      version          = "1"
       output_artifacts = ["source_output"]
 
       configuration = {
-        Owner      = var.github_owner
-        Repo       = var.github_repo
-        Branch     = var.github_branch
-        # OAuthToken = var.github_token
-        OAuthToken = data.aws_ssm_parameter.github_token.value
-        # aws ssm put-parameter --name "/resume/github_token" --value "ghp_YourGitHubTokenHere" --type "SecureString"
-
+        ConnectionArn = aws_codestarconnections_connection.github.arn
+        FullRepositoryId = "${var.github_owner}/${var.github_repo}"
+        BranchName = var.github_branch
+        DetectChanges = "true"
       }
     }
   }
+
 
   stage {
     name = "Build"
@@ -831,6 +830,24 @@ resource "aws_codepipeline" "resume_pipeline" {
       }
     }
   }
+
+  stage {
+    name = "Test"
+    action {
+      name             = "UnitTests"
+      category         = "Build"
+      owner            = "AWS"
+      provider         = "CodeBuild"
+      version          = "1"
+      input_artifacts  = ["source_output"]
+      output_artifacts = ["test_output"]
+
+      configuration = {
+        ProjectName = aws_codebuild_project.resume_tests.name
+      }
+    }
+  }
+
 
   stage {
     name = "Deploy"
