@@ -6,7 +6,7 @@
     <title>John Doe - Full Stack Developer</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link rel="stylesheet" href="styles-${index_version}.css">
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <!-- Header -->
@@ -225,6 +225,6 @@
         </div>
     </footer>
 
-<script src="scripts-${index_version}.js"></script>
+<script src="scripts.js"></script>
 </body>
 </html>

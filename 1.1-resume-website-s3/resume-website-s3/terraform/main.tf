@@ -73,9 +73,9 @@ resource "aws_s3_bucket_public_access_block" "resume_website" {
   restrict_public_buckets = true
 }
 
-resource "random_id" "index_version" {
-  byte_length = 4
-}
+# resource "random_id" "index_version" {
+#   byte_length = 4
+# }
 
 # #Update the CloudFront distribution to use the S3 bucket's regional endpoint and OAC
 # resource "aws_s3_object" "index_file" {
@@ -556,6 +556,36 @@ resource "aws_iam_role_policy_attachment" "codepipeline_s3_attachment" {
   policy_arn = aws_iam_policy.codepipeline_s3_access.arn
 }
 
+# Allow CodePipeline to trigger CodeBuild projects
+resource "aws_iam_role_policy" "codepipeline_codebuild_access" {
+  name = "codepipeline-codebuild-access"
+  role = aws_iam_role.codepipeline_role.id
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "codebuild:StartBuild",
+          "codebuild:BatchGetProjects"
+        ],
+        Resource = [
+          aws_codebuild_project.resume_build.arn,
+          aws_codebuild_project.resume_deploy.arn,
+          aws_codebuild_project.resume_invalidate.arn
+        ]
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "codebuild:BatchGetBuilds"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # CodeBuild service role for build stage
 resource "aws_iam_role" "codebuild_role" {
   name = "codebuild_service_role"
@@ -654,13 +684,11 @@ phases:
       - REGION=eu-west-1
       - API_BASE_URL=$(aws ssm get-parameter --name "/resume/api_base_url" --with-decryption --query Parameter.Value --output text --region "$REGION")
       - echo "API_BASE_URL=$API_BASE_URL"
-      - INDEX_VERSION=$(date +%s)
-      - export INDEX_VERSION
       - mkdir -p dist
       - SRC=1.1-resume-website-s3/resume-website-s3/frontend
-      - cp "$SRC/styles.css" "dist/styles-$INDEX_VERSION.css"
-      - sed "s|$${backend_api_url}|$API_BASE_URL|g" "$SRC/scripts.js" > "dist/scripts-$INDEX_VERSION.js"
-      - sed "s|$${backend_api_url}|$API_BASE_URL|g; s|$${index_version}|$INDEX_VERSION|g" "$SRC/index.html.tpl" > "dist/index.html"
+      - cp "$SRC/styles.css" "dist/styles.css"
+      - sed 's|$${backend_api_url}|""$API_BASE_URL""|g' "$SRC/scripts.js" > "dist/scripts.js"
+      - sed 's|$${backend_api_url}|""$API_BASE_URL""|g' "$SRC/index.html.tpl" > "dist/index.html"
 artifacts:
   files:
     - '**/*'
